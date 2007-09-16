@@ -1,0 +1,98 @@
+/*************************************************************************/
+/*                                                                       */
+/* Copyright (c) 2005-2007 Howard M. Harte                               */
+/* https://github.com/hharte                                             */
+/*                                                                       */
+/* Module Description:                                                   */
+/*     ZDS-II Linker Script for ZCPR Debug                               */
+/*                                                                       */
+/* Environment:                                                          */
+/*     Zilog ZDS-II v4.11.1 (http://www.zilog.com)                       */
+/*                                                                       */
+/*************************************************************************/
+
+/* Linker Command File - ZCPR Debug */
+
+-FORMAT=OMF695
+-NOigcase -map -NOquiet -warn
+
+RANGE EXTIO $0 : $FFFF
+RANGE INTIO $0 : $FF
+RANGE RAM $040000 : $05ffff
+RANGE ROM $000000 : $03ffff
+
+CHANGE TEXT = DATA
+CHANGE DATA = ROM
+CHANGE .STARTUP = RAM
+CHANGE .INIT = RAM
+
+DEFINE CCP_LEN	= LENGTH OF CCP_SEG
+DEFINE BDOS_LEN	= LENGTH OF BDOS
+DEFINE BIOS_LEN	= LENGTH OF BIOS
+
+SEQUENCE CCP_SEG, BDOS, BIOS
+
+LOCATE CCP_SEG AT (LOWADDR OF RAM) + $0DC00
+LOCATE BDOS AT TOP OF CCP_SEG + 1
+LOCATE BIOS AT TOP OF BDOS + 1
+LOCATE DATA AT (LOWADDR OF ROM + $020000)
+LOCATE .STARTUP AT (LOWADDR OF RAM)
+LOCATE .INIT AT TOP OF .STARTUP + 1
+
+MAXLENGTH CCP_SEG $0800
+MAXLENGTH BDOS $0E00
+MAXLENGTH BIOS $0E00
+
+DEFINE RAM_START = $0000
+DEFINE TPA_LOC	= $00100
+DEFINE CCP_LOC	= BASE OF CCP_SEG
+DEFINE BDOS_LOC = BASE OF BDOS
+DEFINE BIOS_LOC = BASE OF BIOS
+DEFINE FLASHDSK = BASE OF DATA
+
+DEFINE CCP_ROM_LOC  = COPY BASE OF CCP_SEG
+DEFINE BDOS_ROM_LOC = COPY BASE OF BDOS
+DEFINE BIOS_ROM_LOC = COPY BASE OF BIOS
+
+DEFINE __crtl = 0
+DEFINE __CS0_LBR_INIT_PARAM = $00
+DEFINE __CS0_UBR_INIT_PARAM = $00
+DEFINE __CS0_CTL_INIT_PARAM = $E0
+DEFINE __CS0_BMC_INIT_PARAM = $02
+DEFINE __CS1_LBR_INIT_PARAM = (LOWADDR OF RAM >> 16)
+DEFINE __CS1_UBR_INIT_PARAM = (HIGHADDR OF RAM >> 16)
+DEFINE __CS1_CTL_INIT_PARAM = $08
+DEFINE __CS1_BMC_INIT_PARAM = $02
+DEFINE __CS2_LBR_INIT_PARAM = $00
+DEFINE __CS2_UBR_INIT_PARAM = $00
+DEFINE __CS2_CTL_INIT_PARAM = $E0
+DEFINE __CS2_BMC_INIT_PARAM = $02
+DEFINE __CS3_LBR_INIT_PARAM = $00
+DEFINE __CS3_UBR_INIT_PARAM = $00
+DEFINE __CS3_CTL_INIT_PARAM = $E0
+DEFINE __CS3_BMC_INIT_PARAM = $02
+DEFINE __RAM_CTL_INIT_PARAM = $00
+DEFINE __RAM_ADDR_U_INIT_PARAM = $00
+DEFINE __FLASH_CTL_INIT_PARAM = $88
+DEFINE __FLASH_ADDR_U_INIT_PARAM = (LOWADDR OF ROM >> 16)
+
+define _SYS_CLK_FREQ = 50000000
+
+define _OSC_FREQ = 5000000	/* 5MHz Crystal */
+define _SYS_CLK_SRC = 1		/* Use PLL */
+define _OSC_FREQ_MULT = 10	/* to generate a 50MHz system clock */
+define __PLL_CTL0_INIT_PARAM = $41
+define _BOOT_FROM_FLASH = 0
+
+"ZCPR"= \
+ .\cpm_startup.obj, \
+ .\eZ80-CPM-BIOS.obj, \
+ .\ez80sdmem.obj, \
+ .\zcpr.obj, \
+ .\eZ80-CPM-BDOS.obj, \
+ .\eZ80-CPM-UART.obj, \
+ .\sdmem_dbg.obj
+; .\flashdsk.obj
+
+GROUP MEMORY = ROM, RAM
+

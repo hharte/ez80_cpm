@@ -1,0 +1,4 @@
+Release_*
+Debug*
+*.wsp
+*.zdsbak

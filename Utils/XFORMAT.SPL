@@ -1,0 +1,194 @@
+PROGRAM XFormat;
+
+{ $Id: XFORMAT.SPL 847 2006-09-19 07:56:58Z Hharte $
+	Version history
+	- 18-Sep-2006, H. Harte, added support for 128,256, and 512-byte physical sector sizes
+	- 03-Apr-2005, P. Schorn, fixed bug in track computation
+	- 01-Aug-2004, P. Schorn, applied some optimizations
+	- 02-Jul-2004, P. Schorn, updated standard procedures
+	- 11-Oct-2002, P. Schorn, initial version
+}
+
+PROCEDURE BIOS(WORD function, input);	EXTERNAL;
+PROCEDURE BDOS(WORD function, input);	EXTERNAL;
+
+CONST	{ CP/M 2 and CP/M 3 BIOS }
+	SELDSK			= 8;
+	SETTRK			= 9;
+	SETSEC			= 10;
+	SETDMA			= 11;
+	WRITE			= 13;
+	{ CP/M 3 BIOS only }
+	SETBNK			= 27;
+	commandLineAddress	= 80h;
+	consoleInputCmd		= 01;
+	printCharCmd		= 2h;
+	printStringCmd		= 9h;
+	versionNumberCmd	= 0ch;
+	cr			= 13;
+	lf			= 10;
+	crlf			= cr + 256 * lf;
+	eof			= 1ah;
+	hstsiz			= 4;
+	recordSize		= 128;
+
+BYTE 	commandLine AT commandLineAddress;
+	usage		= ('Usage: XFORMAT <drive> formats disk or hard disk <drive>', crlf,	'$':[1]);
+	signon		= (crlf,'XFORMAT V-1.05 (18-Sep-2006)', crlf,			'$':[1]);
+	areYouSure1	= (crlf, 'Drive $');
+	areYouSure2	= (':', crlf, '--------', crlf, '$');
+	areYouSure3a	= (' bytes/sector', crlf,'$');
+	areYouSure3	= (' tracks', crlf, '$');
+	areYouSure4	= (' sectors per track', crlf, '$');
+	areYouSure5	= (crlf, 'Type C to format, any other character to abort $');
+	drive1		= (crlf, 'Drive $');
+	drive2		= (': does not exist.', crlf,					'$':[1]);
+	abortedString	= (crlf, 'Operation aborted.', crlf,				'$':[1]);
+	error1String	= (crlf, 'Write error on track $');
+	sectorString	= ' and sector $';
+	error2String	= ' detected.';
+	crlfString	= (crlf,							'$':[1]);
+
+BYTE[recordSize*hstsiz]
+	buffer = (crlf, crlf,
+	'Copyright 2005 by Peter Schorn, peter.schorn@acm.org', crlf, crlf, eof:[1]);
+WORD	dph, dsm, psh, phm, track, maxTrack, sector, sectorsPerTrack, cpmResult, physSize, i;
+BYTE	bsh, drive, delta, recs;
+
+PROCEDURE CPM2(WORD function, input);
+	BEGIN
+	cpmResult := BDOS(function:[1], input)
+	END CPM2;
+
+PROCEDURE BIOS2(WORD function, input);
+	BEGIN
+	cpmResult := BIOS(function, input)
+	END BIOS2;
+
+PROCEDURE printString(WORD stringp);
+	BEGIN
+	CPM2(printStringCmd, stringp)
+	END printString;
+
+PROCEDURE printChar(WORD char);
+	BEGIN
+	CPM2(printCharCmd, char:[1])
+	END printChar;
+
+PROCEDURE printUnsignedInt(WORD int);
+	BEGIN
+	IF	int << 10
+	THEN	printChar(int + '0')
+	ELSE	printUnsignedInt(int DIV 10);
+		printChar(int MOD 10 + '0')
+	ENDIF
+	END printUnsignedInt;
+
+BEGIN
+printString(@signon);
+
+IF	commandLine[0]:[1] = 0
+THEN	printString(@usage);
+	EXIT
+ENDIF;
+drive := commandLine[2]:[1] - 'A';
+CPM2(versionNumberCmd, 0);
+IF	cpmResult:[1] << 30h
+THEN	delta := 10
+ELSE	delta := 12
+ENDIF;
+BIOS2(256 + SELDSK, drive); { 256 means that we are expecting the result from <HL> }
+
+IF	cpmResult = 0
+THEN	printString(@drive1);
+	printChar(commandLine[2]:[1]);
+	printString(@drive2);
+	EXIT
+ENDIF;
+
+dph := cpmResult^[delta];
+bsh := dph^[2]:[1];
+dsm := dph^[5]:[2];
+psh := dph^[15]:[1];
+phm := dph^[16]:[1];
+
+IF	psh = 2
+THEN	recs := 4
+ELSIF	psh = 1
+THEN	recs := 2
+ELSIF	psh = 0
+THEN	recs := 1
+ENDIF;
+
+physSize := recs * recordSize;
+
+sectorsPerTrack := dph^[0]:[2] DIV recs;
+
+IF	bsh = 4  { BLS = 2'048 }
+THEN	dsm := 2 * dsm
+ELSIF	bsh = 5  { BLS = 4'096 }
+THEN	dsm := 4 * dsm
+ENDIF;
+
+maxTrack := dph^[13]:[2] + (8 * dsm) DIV (sectorsPerTrack * recs);
+
+IF	commandLine[3]:[1] <> 'C'
+THEN	printString(@areYouSure1);
+	printChar(commandLine[2]:[1]);
+	printString(@areYouSure2);
+	printUnsignedInt(physSize);
+	printString(@areYouSure3a);
+	printUnsignedInt(maxTrack+1);
+	printString(@areYouSure3);
+	printUnsignedInt(sectorsPerTrack);
+	printString(@areYouSure4);
+	printString(@areYouSure5);
+	CPM2(consoleInputCmd, 0);
+	IF	(cpmResult:[1] <> 'c') AND (cpmResult:[1] <> 'C')
+	THEN	printString(@abortedString);
+		EXIT
+	ENDIF;
+	printString(@crlfString)
+ENDIF;
+
+i := 0;
+WHILE i << physSize DO
+	buffer[i] := 0e5h;
+	i := i + 1
+ENDWHILE;
+
+sector := 0;
+track := 0;
+
+LOOP
+	sector := sector + 1;
+	IF	sector >> sectorsPerTrack
+	THEN	sector := 1;
+		track := track + 1;
+		printChar('.');
+		IF	track >> maxTrack
+		THEN	EXIT
+		ENDIF;
+		IF	track AND 63 = 0
+		THEN	printString(@crlfString)
+		ENDIF
+	ENDIF;
+
+	IF	delta >> 10
+	THEN	BIOS2(SETBNK, 1)
+	ENDIF;
+	BIOS2(SETDMA, @buffer);
+	BIOS2(SETTRK, track);
+	BIOS2(SETSEC, sector);
+	BIOS2(WRITE, 0);
+	IF	cpmResult:[1] <> 0
+	THEN	printString(@error1String);
+		printUnsignedInt(track);
+		printString(@sectorString);
+		printUnsignedInt(sector);
+		printString(@error2String);
+		EXIT
+	ENDIF
+ENDLOOP;
+printString(@crlfString)
+END XFormat.

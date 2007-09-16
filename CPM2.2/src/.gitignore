@@ -1,0 +1,6 @@
+Release
+Debug
+ZCPR-Debug
+ZCPR-Release
+*.wsp
+*.zdsbak

@@ -1,0 +1,107 @@
+/*************************************************************************/
+/*                                                                       */
+/* $Id: CPM30_Debug.linkcmd 1552 2007-09-13 04:57:00Z hharte $           */
+/*                                                                       */
+/* Copyright (c) 2005-2007 Howard M. Harte                               */
+/* https://github.com/hharte                                             */
+/*                                                                       */
+/* Module Description:                                                   */
+/*     ZDS-II Linker Script for the eZ80_SBC by Howard M. Harte          */
+/*                                                                       */
+/* Environment:                                                          */
+/*     Zilog ZDS-II v4.11.1 (http://www.zilog.com)                       */
+/*                                                                       */
+/*************************************************************************/
+
+/* Linker Command File - CPM30 Debug */
+
+-FORMAT=OMF695
+-map -maxhexlen=64 -NOquiet -warnoverlap -xref
+-sort NAME=ascending -warn -debug -NOigcase
+
+RANGE EXTIO $0 : $FFFF
+RANGE INTIO $0 : $FF
+RANGE RAM $400000 : $47ffff
+RANGE ROM $000000 : $03ffff
+
+CHANGE TEXT = DATA
+CHANGE DATA = ROM
+CHANGE .STARTUP = RAM
+CHANGE .INIT = RAM
+
+DEFINE CCP_LEN	= LENGTH OF CCP_SEG
+DEFINE BDOS_LEN	= LENGTH OF BDOS
+DEFINE BIOS_LEN	= LENGTH OF BIOS
+
+SEQUENCE CCP_SEG, BDOS, BIOS
+
+LOCATE CCP_SEG AT (LOWADDR OF RAM) + $00100
+LOCATE BDOS AT (LOWADDR OF RAM) + $0CD00
+LOCATE BIOS AT TOP OF BDOS + 1
+LOCATE DATA AT (LOWADDR OF ROM + $020000)
+LOCATE .STARTUP AT (LOWADDR OF RAM)
+LOCATE .INIT AT TOP OF CCP_SEG + 1
+
+MAXLENGTH CCP_SEG $0C00
+MAXLENGTH BDOS $2100
+MAXLENGTH BIOS $0E00
+
+DEFINE RAM_START = $0000
+DEFINE TPA_LOC	= $00100
+DEFINE CCP_LOC	= BASE OF CCP_SEG
+DEFINE BDOS_LOC = BASE OF BDOS
+DEFINE BIOS_LOC = BASE OF BIOS
+DEFINE FLASHDSK = BASE OF DATA
+
+DEFINE CCP_ROM_LOC  = COPY BASE OF CCP_SEG
+DEFINE BDOS_ROM_LOC = COPY BASE OF BDOS
+DEFINE BIOS_ROM_LOC = COPY BASE OF BIOS
+
+DEFINE __crtl = 0
+DEFINE __CS0_LBR_INIT_PARAM = $00
+DEFINE __CS0_UBR_INIT_PARAM = $00
+DEFINE __CS0_CTL_INIT_PARAM = $E0
+DEFINE __CS0_BMC_INIT_PARAM = $02
+DEFINE __CS1_LBR_INIT_PARAM = (LOWADDR OF RAM >> 16)
+DEFINE __CS1_UBR_INIT_PARAM = (HIGHADDR OF RAM >> 16)
+DEFINE __CS1_CTL_INIT_PARAM = $28
+DEFINE __CS1_BMC_INIT_PARAM = $02
+DEFINE __CS2_LBR_INIT_PARAM = $00
+DEFINE __CS2_UBR_INIT_PARAM = $00
+DEFINE __CS2_CTL_INIT_PARAM = $E0
+DEFINE __CS2_BMC_INIT_PARAM = $02
+DEFINE __CS3_LBR_INIT_PARAM = $00
+DEFINE __CS3_UBR_INIT_PARAM = $00
+DEFINE __CS3_CTL_INIT_PARAM = $E0
+DEFINE __CS3_BMC_INIT_PARAM = $02
+DEFINE __RAM_CTL_INIT_PARAM = $00
+DEFINE __RAM_ADDR_U_INIT_PARAM = $00
+DEFINE __FLASH_CTL_INIT_PARAM = $88
+DEFINE __FLASH_ADDR_U_INIT_PARAM = (LOWADDR OF ROM >> 16)
+
+define _SYS_CLK_FREQ = 50000000
+
+define _OSC_FREQ = 5000000	/* 5MHz Crystal */
+define _SYS_CLK_SRC = 1		/* Use PLL */
+define _OSC_FREQ_MULT = 10	/* to generate a 50MHz system clock */
+define __PLL_CTL0_INIT_PARAM = $41
+define _BOOT_FROM_FLASH = 0
+
+"CPM30"= \
+ .\init_params_f91.obj, \
+ .\BDOS713.obj, \
+ .\LOADER3.obj, \
+ .\CCP3.obj, \
+ .\BIOSKRNL.obj, \
+ .\CHARIO.obj, \
+ .\BOOT.obj, \
+ .\MOVE.obj, \
+ .\DRVTBL.obj, \
+ .\flashdrv.obj, \
+ .\eZ80-CPM-MMC.obj, \
+ .\eZ80-CPM-DEBUG.obj, \
+ .\sdmmcdrv.obj
+; .\flashdsk.obj
+
+GROUP MEMORY = ROM, RAM
+

@@ -1,0 +1,444 @@
+PROGRAM Mount;
+
+{ $Id: MOUNT.SPL 859 2006-09-25 06:37:26Z Hharte $
+	Version history
+	- 18-Sep-2006, H. Harte, added support for 128,256, and 512-byte physical sector sizes
+}
+
+PROCEDURE BIOS(WORD function, input);	EXTERNAL;
+PROCEDURE BDOS(WORD function, input);	EXTERNAL;
+
+CONST	{ CP/M 2 and CP/M 3 BIOS }
+	WBOOT			= 0;
+	SELDSK			= 8;
+	SETTRK			= 9;
+	SETSEC			= 10;
+	SETDMA			= 11;
+	READ			= 12;
+	WRITE			= 13;
+	{ CP/M 3 BIOS only }
+	SETBNK			= 27;
+	commandLineAddress	= 80h;
+	consoleInputCmd		= 01;
+	printCharCmd		= 2h;
+	printStringCmd		= 9h;
+	versionNumberCmd	= 0ch;
+	cr			= 13;
+	lf			= 10;
+	crlf			= cr + 256 * lf;
+	eof			= 1ah;
+	hstsiz			= 4;
+	recordSize		= 128;
+
+BYTE 	commandLine AT commandLineAddress;
+	usage		= ('Usage: MOUNT <drive> <filename.ext> mounts a disk image', crlf,'$':[1]);
+	signon		= (crlf,'MOUNT V-0.62 (24-Sep-2006)', crlf,			'$':[1]);
+	strDriveCpm	= (crlf, 'Drive $');
+	strLBrkt	= (' [ $');
+	strSlash	= ('/$');
+	strRBrkt	= (' ]$', crlf);
+	strSeparator	= (crlf, '------------------------', crlf, '$');
+	strBytesPerSector	= (' bytes/sector', crlf,'$');
+	strTracks	= (' tracks', crlf, '$');
+	strSectorsPerTrack	= (' sectors per track', crlf, '$');
+	strFATInformation	= (crlf, 'FAT Information:$');
+	drive1		= (crlf, 'Drive $');
+	drive2		= (': does not exist.', crlf,					'$':[1]);
+	abortedString	= (crlf, 'Operation aborted.', crlf,				'$':[1]);
+	error1String	= (crlf, 'Read error on$');
+	crlfString	= (crlf,							'$':[1]);
+	strBootSectorOffset = ('Boot sector on Track: $');
+	strBytesPerSec  = (' bytes per sector', crlf, '$');
+	strRsvdSec      = (' reserved sectors', crlf, '$');
+	strSecPerCluster= (' sectors/cluster', crlf, '$');
+	strNumFATs      = (' FATs', crlf, '$');
+	strSecPerFAT    = (' sectors/FAT', crlf, '$');
+	strHiddenSects	= (' hidden sectors', crlf, '$');
+	strRootDirSect	= (' root directory sector', crlf, '$');
+	strRootDir	= ('Root directory on $');
+	strSpaceSep	= (': $');
+	strRootDirEntries = (' root directory entries', crlf, '$');
+	strDataStartSec = (' data start sector', crlf, '$');
+	strDataStart	= ('Data start $');
+	strBootSect	= ('Boot Sector on $');
+	strMBR		= ('MBR on $');
+	strFileOffsetClust = (', Cluster: $');
+	strFileOffset	= (', abs Sector: $');
+	strFileTrackSec	= (' $');
+	strTrack	= ('Track: $');
+	strSector	= (', Sector: $');
+	strFourSpaces	= ('    $');
+	strPartGapFound = ('Partition gap found.', crlf, '$');
+	strInvalidSig	= ('Invalid signature $', crlf, crlf, '$');
+	strExpSig	= (', expected $');
+	strInvalidBootSector = ('Boot sector not valid.', crlf, '$');
+	strOffsetTbl 	= ('Offset table @:$');
+	strMounted	= (' Mounted as $');
+	strInvalidDrive = ('Only drives C:-F: can be mounted.', crlf, '$');
+	strInvalidBlockSize = ('Invalid block size.', crlf, '$');
+	strBlockSize	= (' byte block size', crlf, '$');
+	strBlockCount	= (' block count', crlf, '$');
+
+BYTE[recordSize*hstsiz]
+	buffer = (crlf, crlf,
+	'Copyright 2006 by Howard M. Harte', crlf, crlf, eof:[1]);
+WORD	dph, dsm, psh, phm, track, maxTrack, sector, sectorsPerTrack, cpmResult, physSize, i;
+WORD	sectSize, numReservedSectors, secPerCluster, numFATs, numSecPerFAT, numHiddenSects, numRootDirSect;
+WORD	rootDirTrack, rootDirSect, numRootDirEntries;
+BYTE	bsh, drive, delta, recs;
+BYTE	nAttachedDrive;
+BYTE	rdrv, ctrlr;
+WORD	wSignature;
+WORD	numSectPerFS_H;
+WORD	numSectPerFS_L;
+WORD	fileStartClust, fileStartSect, fileTrack, fileSect;
+WORD	numDataStartSect;
+WORD	dataStartTrack, dataStartSect;
+WORD	offsetTbl;
+WORD	tblPtr;
+WORD	fileSizeH, fileSizeL;
+WORD	blockSize;
+WORD	blockCount;
+WORD	offs;
+
+PROCEDURE CPM2(WORD function, input);
+	BEGIN
+	cpmResult := BDOS(function:[1], input)
+	END CPM2;
+
+PROCEDURE BIOS2(WORD function, input);
+	BEGIN
+	cpmResult := BIOS(function, input)
+	END BIOS2;
+
+PROCEDURE printString(WORD stringp);
+	BEGIN
+	CPM2(printStringCmd, stringp)
+	END printString;
+
+PROCEDURE printChar(WORD char);
+	BEGIN
+	CPM2(printCharCmd, char:[1])
+	END printChar;
+
+PROCEDURE printUnsignedInt(WORD int);
+	BEGIN
+	IF	int << 10
+	THEN	printChar(int + '0')
+	ELSE	printUnsignedInt(int DIV 10);
+		printChar(int MOD 10 + '0')
+	ENDIF
+	END printUnsignedInt;
+
+PROCEDURE printHexDigit(WORD Byte);
+	STATIC BYTE hexDigits = ('0123456789ABCDEF');
+	BEGIN
+	printChar(hexDigits[Byte:[1] DIV 16]:[1]);
+	printChar(hexDigits[Byte:[1] AND 15]:[1])
+	END printHexDigit;
+
+PROCEDURE printHexWord(WORD Byte);
+	STATIC BYTE hexDigits = ('0123456789ABCDEF');
+	BEGIN
+	printChar(hexDigits[Byte[1]:[1] DIV 16]:[1]);
+	printChar(hexDigits[Byte[1]:[1] AND 15]:[1]);
+	printChar(hexDigits[Byte:[1] DIV 16]:[1]);
+	printChar(hexDigits[Byte:[1] AND 15]:[1]);
+	printChar('H');
+	END printHexWord;
+
+PROCEDURE checkSignature(WORD wSig);
+	BEGIN
+	wSignature := buffer[510]:[2];
+	{ Check to make sure signature is valid.  If not, the card probably needs to be DOS formatted. }
+	IF wSignature <> wSig
+	THEN	printString(@strInvalidSig);
+		printHexWord(wSignature);
+		printString(@strExpSig);
+		printHexWord(wSig);
+		BIOS2(WBOOT, 0);
+		EXIT;
+	ENDIF;
+	END checkSignature;
+
+PROCEDURE printTrackSector(WORD wString);
+	BEGIN
+	printString(wString);
+	printString(@strTrack);
+	printUnsignedInt(track);
+	printString(@strSector);
+	printUnsignedInt(sector);
+	printString(@crlfString);
+	END printTrackSector;
+
+PROCEDURE readSector(WORD wBuffer);
+	BEGIN
+	BIOS2(SETDMA, wBuffer);
+	BIOS2(SETTRK, track);
+	BIOS2(SETSEC, sector);
+	BIOS2(READ, 0);
+	IF	cpmResult:[1] <> 0
+	THEN	printTrackSector(@error1String);
+		BIOS2(WBOOT, 0);
+	ENDIF;
+	END readSector;
+
+PROCEDURE readMBR;
+	WORD	numGapSectors;
+	BEGIN
+
+	readSector(@buffer);
+	
+	checkSignature(0AA55H);
+	
+	sectSize := buffer[11]:[2];
+	
+	IF sectSize <> 512
+	THEN	printString(@strPartGapFound);
+		numGapSectors := buffer[454]:[2];
+		track := numGapSectors DIV sectorsPerTrack;
+		sector := (numGapSectors MOD sectorsPerTrack) + 1;
+	ENDIF;
+	
+	END readMBR;
+
+BEGIN
+printString(@signon);
+
+IF	commandLine[0]:[1] = 0
+THEN	printString(@usage);
+	EXIT
+ENDIF;
+drive := commandLine[2]:[1] - 'A';
+
+IF	(drive < 2) OR (drive > 5)
+THEN	printString(@strInvalidDrive);
+	EXIT;
+ENDIF;
+
+CPM2(versionNumberCmd, 0);
+
+IF	cpmResult:[1] << 30h
+THEN	delta := 10
+ELSE	delta := 12
+ENDIF;
+
+BIOS2(256 + SELDSK, drive); { 256 means that we are expecting the result from <HL> }
+
+IF	cpmResult = 0
+THEN	printString(@drive1);
+	printChar(commandLine[2]:[1]);
+	printString(@drive2);
+	EXIT
+ENDIF;
+
+dph := cpmResult^[delta];
+ctrlr := cpmResult^[-1]:[1];
+rdrv := cpmResult^[-2]:[1];
+bsh := dph^[2]:[1];
+dsm := dph^[5]:[2];
+offs := dph^[13]:[2];
+psh := dph^[15]:[1];
+phm := dph^[16]:[1];
+offsetTbl := dph^[17]:[2];
+
+offsetTbl^[rdrv*4]:[2] := 0000h;
+offsetTbl^[(rdrv*4)+2]:[2] := 0000h;
+
+IF	bsh = 5
+THEN	blockSize := 4096;
+ELSIF	bsh = 4
+THEN	blockSize := 2048;
+ELSIF	bsh = 3
+THEN	blockSize := 1024;
+ELSIF	bsh = 2
+THEN	blockSize := 512;
+ELSIF	bsh = 1
+THEN	blockSize := 256;
+ELSIF	bsh = 1
+THEN	blockSize := 128;
+ELSE	printString(@strInvalidBlockSize);
+	EXIT;
+ENDIF;
+
+blockCount := dsm + offs + 1;
+
+IF	psh = 2
+THEN	recs := 4
+ELSIF	psh = 1
+THEN	recs := 2
+ELSIF	psh = 0
+THEN	recs := 1
+ENDIF;
+
+physSize := recs * recordSize;
+
+sectorsPerTrack := dph^[0]:[2] DIV recs;
+
+IF	bsh = 4  { BLS = 2'048 }
+THEN	dsm := 2 * dsm
+ELSIF	bsh = 5  { BLS = 4'096 }
+THEN	dsm := 4 * dsm
+ENDIF;
+
+maxTrack := dph^[13]:[2] + (8 * dsm) DIV (sectorsPerTrack * recs);
+
+printString(@strDriveCpm);
+printChar(commandLine[2]:[1]);
+
+printString(@strLBrkt);
+printUnsignedInt(ctrlr);
+printString(@strSlash);
+printUnsignedInt(rdrv);
+printString(@strRBrkt);
+
+printString(@strSeparator);
+printUnsignedInt(physSize);
+printString(@strBytesPerSector);
+printUnsignedInt(maxTrack+1);
+printString(@strTracks);
+printUnsignedInt(sectorsPerTrack);
+printString(@strSectorsPerTrack);
+printUnsignedInt(blockSize);
+printString(@strBlockSize);
+printUnsignedInt(blockCount);
+printString(@strBlockCount);
+
+{ printString(@strOffsetTbl);
+printHexWord(offsetTbl); }
+printString(@crlfString);
+
+track := 0;
+sector := 1;
+
+printTrackSector(@strMBR);
+{ Read first phyiscal sector of the disk }
+readMBR;
+
+printTrackSector(@strBootSect);
+
+printString(@strFATInformation);
+printString(@crlfString);
+
+{ Read the boot sector }
+readSector(@buffer);
+checkSignature(0AA55h);
+
+sectSize := buffer[11]:[2];
+
+IF sectSize <> 512
+THEN	printString(@strInvalidBootSector);
+	EXIT;
+ENDIF;
+
+
+secPerCluster := buffer[13]:[1];
+numReservedSectors := buffer[14]:[2];
+numFATs := buffer[16]:[1];
+numRootDirEntries := buffer[17]:[2];
+numSecPerFAT := buffer[22]:[2];
+numHiddenSects := buffer[28]:[2];
+numRootDirSect := (numFATs * numSecPerFAT) + numHiddenSects + numReservedSectors ;
+numDataStartSect := numRootDirSect + ((numRootDirEntries * 32) DIV sectSize);
+numSectPerFS_L := buffer[32]:[2];
+numSectPerFS_H := buffer[34]:[2];
+
+printUnsignedInt(sectSize);
+printString(@strBytesPerSec);
+
+printUnsignedInt(secPerCluster);
+printString(@strSecPerCluster);
+
+printUnsignedInt(numReservedSectors);
+printString(@strRsvdSec);
+
+printUnsignedInt(numFATs);
+printString(@strNumFATs);
+
+printUnsignedInt(numRootDirEntries);
+printString(@strRootDirEntries);
+
+printUnsignedInt(numSecPerFAT);
+printString(@strSecPerFAT);
+
+printUnsignedInt(numHiddenSects);
+printString(@strHiddenSects);
+
+printUnsignedInt(numRootDirSect);
+printString(@strRootDirSect);
+
+printUnsignedInt(numDataStartSect);
+printString(@strDataStartSec);
+
+rootDirTrack := numRootDirSect DIV sectorsPerTrack;
+rootDirSect := (numRootDirSect MOD sectorsPerTrack) + 1;
+
+track := rootDirTrack;
+sector := rootDirSect;
+
+printTrackSector(@strRootDir);
+printString(@crlfString);
+
+dataStartTrack := numDataStartSect DIV sectorsPerTrack;
+dataStartSect := (numDataStartSect MOD sectorsPerTrack) + 1;
+
+
+{ Read Root Directory }
+readSector(@buffer);
+
+i := 0;
+nAttachedDrive := rdrv;
+
+LOOP	IF buffer[i]:[1] = 0
+	THEN	EXIT;
+	ENDIF;
+
+	IF buffer[i]:[1] <> 0E5h
+	THEN
+	
+		fileStartClust := buffer[i+26]:[2];
+		fileSizeH := buffer[i+30]:[2];
+		fileSizeL := buffer[i+28]:[2];
+	 
+		IF (fileStartClust <> 0) AND (fileSizeH = 0080H)
+		THEN
+			fileStartClust := fileStartClust - 2;
+
+			fileStartSect := (secPerCluster * fileStartClust) + numDataStartSect;
+	
+			fileTrack := fileStartSect DIV sectorsPerTrack;
+			fileSect := fileStartSect MOD sectorsPerTrack;
+
+			offsetTbl^[nAttachedDrive*4]:[2] := fileTrack;
+			offsetTbl^[(nAttachedDrive*4)+2]:[2] := fileSect;
+
+			buffer[i+11]:[1] := '$';
+			printUnsignedInt(nAttachedDrive);
+			printString(@strSpaceSep);
+			printString(@buffer[i]);
+
+			printString(@strFileOffsetClust);
+			printUnsignedInt(fileStartClust);
+			printString(@strFileOffset);
+			printUnsignedInt(fileStartSect);
+{			printTrackSector(@strFileTrackSec); }
+
+			printString(@strMounted);
+			printChar(nAttachedDrive + 'C');
+			printChar(':');
+			printString(@crlfString);
+			nAttachedDrive := nAttachedDrive + 1;
+{		ELSE	printString(@crlfString); }
+		ENDIF;
+	ENDIF;
+
+	i := i + 32;
+	
+	IF	i >> sectSize
+	THEN	EXIT;
+	ENDIF;
+
+ENDLOOP;
+
+printString(@crlfString)
+END Mount.

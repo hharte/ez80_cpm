@@ -1,0 +1,253 @@
+PROGRAM ShowSec;
+
+{ $Id: SHOWSEC.SPL 847 2006-09-19 07:56:58Z Hharte $
+	Version history
+	- 18-Sep-2006, H. Harte, added support for 128,256, and 512-byte physical sector sizes
+	- 15-Aug-2004, P. Schorn, added some optimizations
+	- 30-Jun-2004, P. Schorn, updated standard procedures
+	- 30-Mar-2002, P. Schorn, cleaned up data types
+	- 24-Mar-2002, P. Schorn, added force Z80 CPU
+}
+
+PROCEDURE BIOS(WORD function, input);	EXTERNAL;
+PROCEDURE BDOS(WORD function, input);	EXTERNAL;
+
+CONST	{ CP/M 2 and CP/M 3 BIOS }
+	SELDSK			= 8;
+	SETTRK			= 9;
+	SETSEC			= 10;
+	SETDMA			= 11;
+	READ			= 12;
+	{ CP/M 3 BIOS only }
+	SETBNK			= 27;
+	commandLineAddress	= 80h;
+	printCharCMD		= 2h;
+	printStringCMD		= 9h;
+	versionNumberCMD	= 0ch;
+	currentDiskCMD		= 19h;
+	cr			= 13;
+	lf			= 10;
+	crlf			= cr + 256*lf;
+	eof			= 1ah;
+	recordSize		= 128;
+	sectorSize		= 512;
+
+BYTE[sectorSize]
+	buffer = (crlf, crlf,
+	'Copyright 2004 by Peter Schorn, peter.schorn@acm.org', crlf, crlf, eof:[1]);
+BYTE 	commandLine AT commandLineAddress;
+	usage		= ('SHOWSEC [<drive>] <track> [<sector> [<trackF> <sectorF>]]', crlf,
+		'  hex dump on <drive>[A:-..] of <track>[0..] and <sector>[1..]', crlf,
+		'  [ to <trackF>[0..] and <sectorF>[1..] ]', crlf, '$':[1], eof:[1]);
+	signon		= (crlf,'SHOWSEC V-1.09 (18-Sep-2006)', crlf, '$':[1]);
+	driveString	= (crlf, 'Drive <$');
+	trackString	= (':> - Track <$');
+	sectorString	= ('> - Sector <$');
+	crlfString	= (crlf, '$':[1]);
+	middleString	= (':  $');
+	errorString	= (crlf, 'Non recoverable read error occurred.', crlf, '$':[1]);
+	drive1		= (crlf, 'Drive $');
+	drive2		= (': does not exist.', crlf,					'$':[1]);
+	cmd, drive, delta, recs, bsh;
+WORD	track, finalTrack, sector, finalSector, sectorsPerTrack, result, tmpByte, tmpWord,
+	dph, dsm, psh, phm, cpmResult, physSize;
+
+PROCEDURE printString(WORD stringp);
+	BEGIN
+	BDOS(printStringCMD, stringp)
+	END printString;
+
+PROCEDURE printChar(WORD char);
+	BEGIN
+	BDOS(printCharCMD, char:[1])
+	END printChar;
+
+PROCEDURE printUnsignedInt(WORD int);
+	BEGIN
+	IF	int << 10
+	THEN	printChar(int + '0')
+	ELSE	printUnsignedInt(int DIV 10);
+		printChar(int MOD 10 + '0')
+	ENDIF
+	END printUnsignedInt;
+
+PROCEDURE printHexDigit(WORD Byte);
+	STATIC BYTE hexDigits = ('0123456789ABCDEF');
+	BEGIN
+	printChar(hexDigits[Byte:[1] DIV 16]:[1]);
+	printChar(hexDigits[Byte:[1] AND 15]:[1])
+	END printHexDigit;
+
+PROCEDURE printHexWord(WORD Byte);
+	STATIC BYTE hexDigits = ('0123456789ABCDEF');
+	BEGIN
+{	printChar(hexDigits[Byte[1]:[1] DIV 16]:[1]); }
+	printChar(hexDigits[Byte[1]:[1] AND 15]:[1]);
+	printChar(hexDigits[Byte:[1] DIV 16]:[1]);
+	printChar(hexDigits[Byte:[1] AND 15]:[1])
+	END printHexWord;
+
+
+PROCEDURE BIOS2(WORD function, input);
+	BEGIN
+	cpmResult := BIOS(function, input)
+	END BIOS2;
+
+PROCEDURE showBuffer;
+	STATIC WORD n;
+
+	PROCEDURE showASCII;
+		STATIC WORD k;
+		BEGIN
+		k := n - 16;
+		printChar(' ');
+		WHILE k << n DO
+			tmpByte := buffer[k]:[1] AND 07fH;
+			IF	tmpByte >>= ' '
+			THEN	printChar(tmpByte)
+			ELSE	printChar('.')
+			ENDIF;
+			k := k + 1
+		ENDWHILE
+		END showASCII;
+
+	BEGIN { showBuffer }
+	n := 0;
+	WHILE n << physSize DO
+		IF	(n AND 0fh) = 0
+		THEN	IF	n >> 0
+			THEN	showASCII
+			ENDIF;
+			printString(@crlfString);
+			printHexWord(n);
+			printChar('-');
+			printHexWord(n + 15);
+			printString(@middleString)
+		ENDIF;
+		printHexDigit(buffer[n]:[1]), printChar(' '), n := n + 1
+	ENDWHILE;
+	showASCII, printString(@crlfString)
+	END showBuffer;
+
+{ read the integer pointed by 'cmd' and deposit result in 'result' }
+PROCEDURE readInt;
+	BEGIN
+	WHILE commandLine[cmd]:[1] = ' ' DO
+		cmd := cmd + 1
+	ENDWHILE;
+	result := 0;
+	LOOP	tmpByte := commandLine[cmd]:[1], cmd := cmd + 1;
+		IF	(tmpByte << '0') OR (tmpByte >> '9')
+		THEN	EXIT
+		ENDIF;
+		result := 10 * result + (tmpByte - '0')
+	ENDLOOP
+	END readInt;
+
+BEGIN { ShowSec }
+printString(@signon);
+
+IF	commandLine[0]:[1] = 0
+THEN	printString(@usage), EXIT
+ENDIF;
+
+IF	commandLine[3]:[1] = ':'
+THEN	drive := commandLine[2]:[1] - 'A', cmd := 4;
+ELSE	drive := BDOS(currentDiskCMD, 0);
+	cmd := 2
+ENDIF;
+
+readInt;
+track := result;
+readInt;
+sector := result;
+
+IF	cmd << commandLine[0]:[1]
+THEN	readInt, finalTrack := result, readInt, finalSector := result
+ELSE	finalTrack := track, finalSector := sector
+ENDIF;
+
+IF	BDOS(versionNumberCMD, 0) << 30h
+THEN	delta := 10
+ELSE	delta := 12
+ENDIF;
+{ 256 means that we are expecting the result from <HL> }
+sectorsPerTrack := (BIOS(256 + SELDSK, drive))^[delta]^;
+
+BIOS2(256 + SELDSK, drive); { 256 means that we are expecting the result from <HL> }
+
+IF	cpmResult = 0
+THEN	printString(@drive1);
+	printChar(commandLine[2]:[1]);
+	printString(@drive2);
+	EXIT
+ENDIF;
+
+dph := cpmResult^[delta];
+bsh := dph^[2]:[1];
+dsm := dph^[5]:[2];
+psh := dph^[15]:[1];
+phm := dph^[16]:[1];
+
+IF	psh = 2
+THEN	recs := 4
+ELSIF	psh = 1
+THEN	recs := 2
+ELSIF	psh = 0
+THEN	recs := 1
+ENDIF;
+
+physSize := recs * recordSize;
+
+sectorsPerTrack := dph^[0]:[2] DIV recs;
+
+IF	bsh = 4  { BLS = 2'048 }
+THEN	dsm := 2 * dsm
+ELSIF	bsh = 5  { BLS = 4'096 }
+THEN	dsm := 4 * dsm
+ENDIF;
+
+{maxTrack := dph^[13]:[2] + (8 * dsm) DIV (sectorsPerTrack * recs);}
+
+IF	sector << 1
+THEN	sector := 1
+ELSIF	sector >> sectorsPerTrack
+THEN	sector := sectorsPerTrack
+ENDIF;
+IF	finalSector << 1
+THEN	finalSector := 1
+ELSIF   finalSector >> sectorsPerTrack
+THEN	finalSector := sectorsPerTrack
+ENDIF;
+
+IF	(finalTrack << track) OR (finalTrack = track) AND (finalSector << sector)
+THEN	tmpWord := track,	sector := finalTrack,	finalTrack := tmpWord;
+	tmpWord := sector,	sector := finalSector,	finalSector := tmpWord
+ENDIF;
+
+LOOP	printString(@driveString), printChar('A' + drive);
+	printString(@trackString), printUnsignedInt(track);
+	printString(@sectorString), printUnsignedInt(sector);
+	printChar('/'), printUnsignedInt(sectorsPerTrack);
+	printChar('>');
+
+	IF	delta >> 10
+	THEN	BIOS(SETBNK, 1)
+	ENDIF;
+	BIOS(SETDMA, @buffer);
+	BIOS(SETTRK, track);
+	BIOS(SETSEC, sector);
+
+	IF	BIOS(READ, 0) = 0
+	THEN	showBuffer
+	ELSE	printString(@errorString), EXIT
+	ENDIF;
+	IF	(track = finalTrack) AND (sector = finalSector)
+	THEN	EXIT
+	ENDIF;
+	sector := sector + 1;
+	IF	sector >> sectorsPerTrack
+	THEN	sector := 1, track := track + 1
+	ENDIF
+ENDLOOP
+END ShowSec.

@@ -1,0 +1,60 @@
+$Id: CBIOS_Source_Release_Notes.txt 1557 2007-09-15 16:28:48Z hharte $
+
+CBIOS Source Package Information
+================================
+
+There are three platforms supported by this release:
+
+1. eZ80SBC with Mini Ethernet Module (MDS)
+2. eZ80SBC with Full Size Ethernet Module (Platform)
+3. Zilog Smart Serial Cable (ZSSC)
+
+For each platform, there is a Debug and Release build.
+
+The Debug build may contain extra debugging code, and is designed to run from RAM on the target.  The FLASH disk image must have been previously loaded on the FLASH by burning one of the Release builds.
+
+The Release build is intended for burning the entire image to the FLASH.  This includes the Startup code, CCP,  BDOS, and CBIOS as well as the FLASH disk image.  During startup, the CCP, BDOS, and CBIOS are copied from FLASH to RAM, and executed from RAM.
+
+The CP/M CCP, BDOS, and low-level SD card access routines are contained in CPM3LIB.lib.  This is linked with the CBIOS source to form a complete CP/M image.
+
+Limitations, Errata, and Desired Enhancements to the CBIOS
+==========================================================
+
+Real-Time Clock (clock.asm)
+---------------------------
+
+The Real-Time Clock is not supported properly.
+
+
+SD Memory Card Driver (sdmmcdrv.asm)
+------------------------------------
+
+The SD Memory Card driver does not support both SD Card slots properly.  This is a limitation of the CBIOS as well as the MOUNT.COM utility.  MOUNT.COM is written in the SPL programming language, and the source, MOUNT.SPL, is provided in this package.
+
+The CBIOS treats drives C: and D: as being image files on a memory card in the first SD slot.  Drives E: and F: are image files from the second SD slot.  But, MOUNT.COM reads the FAT filesystem only from the card in the first SD slot.  So, two SD card slots can be tested by using identical SD cards in each slot.  The cards should also be formatted the same way.  Then, if four files are copied to the first SD card, say:
+
+    CPM3_C.DSK
+    CPM3_D.DSK
+    CPM3_E.DSK
+    CPM3_F.DSK
+
+and the same four files are copied to a second SD card, then when you run MOUNT, the images will be mounted as follows:
+
+C: CPM3_C.DSK on First SD Card
+D: CPM3_D.DSK on First SD Card
+E: CPM3_E.DSK on Second SD Card
+F: CPM3_F.DSK on Second SD Card
+
+The MOUNT utility and the SD Memory Card Driver do not really understand the FAT filesystem fully.  The MOUNT utility is able to find the first sector of a given file on the SD card, but the driver does not understand FAT cluster chains, and cannot follow these chains.  For this reason, files on the SD card must be contiguous.  This can be accomplished by formatting the SD card with Windows, and then copying the files one at a time.
+
+Becuase the MOUNT utility uses 16-bit arithmetic, it cannot mount a file on the SD card which is beyond 32 Megabytes from the beginning of the SD card.  This limitation is only because of the MOUNT utility, and is not a limitation of the CBIOS itself.
+
+The SD Memory Card Driver does not support High-Capacity SD cards (SD-HC.)  The SD-HC cards are SD Memory Cards greater than 2GB.
+
+
+Internal FLASH Filesystem is Read-Only (flashdrv.asm)
+-----------------------------------------------------
+
+The Internal 128K FLASH Filesystem (A: drive) is read-only.  In order to generate the disk image for this drive, the 128k.dsk image file can be mounted with SIMH/AltairZ80 and manipulated.  This file must be converted to a an array of bytes and placed in the file FLASHDSK.C.  The FLASH filesystem must include the MOUNT.COM utility, so that SD Memory Cards can be mounted.
+
+The Internal FLASH drive could be made writable, by adding support to flashdrv.asm.  This would require using some of the eZ80SBC's RAM to handle blocking/deblocking.  In order not to interfere with the CP/M TPA, this code should use ADL mode and locate the blocking/deblocking buffer outside of CP/M's 64K bank.
